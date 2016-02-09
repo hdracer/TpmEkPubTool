@@ -6,7 +6,10 @@ int main()
     NCRYPT_PROV_HANDLE hProv = NULL;
     PBYTE pbEkPub = NULL;
     DWORD cbEkPub = 0;
-    BCRYPT_RSAKEY_BLOB* pKey = NULL;
+    NCRYPT_KEY_HANDLE hPubKey = NULL;
+    //BCRYPT_RSAKEY_BLOB* pKey = NULL;
+    PCERT_PUBLIC_KEY_INFO pPkInfo = NULL;
+    DWORD cbPkInfo = 0;
     BCRYPT_ALG_HANDLE hAlg = NULL;
     BCRYPT_HASH_HANDLE hHash = NULL;
     PBYTE pbHashObject = NULL;
@@ -60,7 +63,72 @@ int main()
         goto Cleanup;
     }
 
-    pKey = (BCRYPT_RSAKEY_BLOB*)pbEkPub;
+    //
+    // Import the public key as a temporary handle
+    //
+
+    NCryptFreeObject(hProv);
+    hProv = NULL;
+    if (0 != (status = NCryptOpenStorageProvider(
+        &hProv,
+        MS_KEY_STORAGE_PROVIDER,
+        0)))
+    {
+        goto Cleanup;
+    }
+
+    if (0 != (status = NCryptImportKey(
+        hProv,
+        NULL,
+        BCRYPT_PUBLIC_KEY_BLOB,
+        NULL,
+        &hPubKey,
+        pbEkPub,
+        cbEkPub,
+        0)))
+    {
+        goto Cleanup;
+    }
+
+    //pKey = (BCRYPT_RSAKEY_BLOB*)pbEkPub;
+
+    //
+    // Export an encoded copy of the public
+    //
+
+    if (FALSE == CryptExportPublicKeyInfoEx(
+        hPubKey,
+        0,
+        X509_ASN_ENCODING | PKCS_7_ASN_ENCODING,
+        szOID_RSA_RSA,
+        0,
+        NULL,
+        NULL,
+        &cbPkInfo))
+    {
+        status = GetLastError();
+        goto Cleanup;
+    }
+
+    if (NULL == (pPkInfo = (PCERT_PUBLIC_KEY_INFO)malloc(cbPkInfo)))
+    {
+        status = ERROR_NOT_ENOUGH_MEMORY;
+        goto Cleanup;
+    }
+
+    if (FALSE == CryptExportPublicKeyInfoEx(
+        hPubKey,
+        0,
+        X509_ASN_ENCODING | PKCS_7_ASN_ENCODING,
+        szOID_RSA_RSA,
+        0,
+        NULL,
+        pPkInfo,
+        &cbPkInfo))
+    {
+        status = GetLastError();
+        goto Cleanup;
+    }
 
     //
     // Open a hash handle
@@ -109,8 +177,8 @@ int main()
 
     if (0 != (status = BCryptHashData(
         hHash,
-        &pbEkPub[sizeof(BCRYPT_RSAKEY_BLOB) + pKey->cbPublicExp],
-        pKey->cbModulus, 
+        pPkInfo->PublicKey.pbData,
+        pPkInfo->PublicKey.cbData,
         0)))
     {
         goto Cleanup;
@@ -174,6 +242,12 @@ Cleanup:
         BCryptCloseAlgorithmProvider(hAlg, 0);
     if (NULL != pbHashObject)
         free(pbHashObject);
+    if (NULL != pPkInfo)
+        free(pPkInfo);
+    if (NULL != hPubKey)
+        NCryptFreeObject(hPubKey);
+    if (NULL != hProv)
+        NCryptFreeObject(hProv);
 
     return (int) status;
 }
